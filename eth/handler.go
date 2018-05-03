@@ -663,11 +663,11 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 			}
 			p.MarkTransaction(tx.Hash())
 		}
-		pm.txpool.AddToDB(txs)
 		// Transactions arrived, make sure we have a valid and fresh chain to handle them
 		if atomic.LoadUint32(&pm.acceptTxs) == 0 {
 			break
 		}
+		pm.txpool.AddToDB(txs)
 		pm.txpool.AddRemotes(txs)
 
 	default:
