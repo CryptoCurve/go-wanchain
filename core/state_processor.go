@@ -74,7 +74,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
-		receipt, _,tResult, err := TraceApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, totalUsedGas.Int64(), cfg)
+		receipt, _,tResult, err := TraceApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, totalUsedGas, cfg)
 		txFees.Add(txFees,new(big.Int).Mul(big.NewInt(receipt.GasUsed.Int64()),tx.GasPrice()))
 		if err != nil {
 			return nil, nil, nil, err
@@ -191,7 +191,7 @@ func ApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common
 	return receipt, gas, err
 }
 
-func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *big.Int, cfg vm.Config) (*types.Receipt, uint64, interface{}, error) {
+func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *big.Int, cfg vm.Config) (*types.Receipt, *big.Int, interface{}, error) {
 	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number))
 	if err != nil {
 		return nil, 0, nil, err
@@ -219,7 +219,7 @@ func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *c
 
 	// Create a new receipt for the transaction, storing the intermediate root and gas used by the tx
 	// based on the eip phase, we're passing wether the root touch-delete accounts.
-	receipt := types.NewReceipt(root, failed, *usedGas)
+	receipt := types.NewReceipt(root, failed, usedGas)
 	receipt.TxHash = tx.Hash()
 	receipt.GasUsed = new(big.Int).Set(gas)
 	// if the transaction created a contract, store the creation address in the receipt.
