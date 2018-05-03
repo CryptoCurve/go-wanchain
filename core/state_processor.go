@@ -60,11 +60,12 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, *big.Int, error) {
 	var (
 		receipts     types.Receipts
-		totalUsedGas = big.NewInt(0)
+		usedGas  	 = new(uint64)
 		header       = block.Header()
 		allLogs      []*types.Log
 		gp           = new(GasPool).AddGas(block.GasLimit())
-		txFees		 	 = big.NewInt(0)
+		txFees		 = big.NewInt(0)
+		txBlocks	 []rdb.TxBlock
 	)
 	// Mutate the the block and state according to any hard-fork specs
 	//if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
@@ -73,11 +74,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
-		//receipt, _, err := ApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, totalUsedGas, cfg)
-		receipt, _, tResult, err := TraceApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, totalUsedGas, cfg)
-		txFees.Add(txFees,new(big.Int).Mul(receipt.GasUsed,tx.GasPrice()))
+		receipt, _,tResult, err := TraceApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, usedGas, cfg)
+		txFees.Add(txFees,new(big.Int).Mul(big.NewInt(int64(receipt.GasUsed)),tx.GasPrice()))
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, 0, err
 		}
 		txBlocks = append(txBlocks, rdb.TxBlock{
 			Tx: tx,
@@ -100,24 +100,18 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		State: statedb,
 		PrevTd: p.bc.GetTd(block.ParentHash(), block.NumberU64()-1),
 		Receipts: receipts,
-		Signer: types.MakeSigner(p.bc.config, block.Header().Number),
+		Signer: types.MakeSigner(p.bc.Config(), block.Header().Number),
 		IsUncle: false,
 		TxFees: txFees,
-		BlockRewardFunc: func(block *types.Block) (*big.Int, *big.Int) {
+		BlockRewardFunc: func(block *types.Block) (*big.Int, *big.Int){
 			blockReward := FrontierBlockReward
-			if p.config.IsByzantium(header.Number) {
-				blockReward = ByzantiumBlockReward
-			}
 			reward := new(big.Int).Set(blockReward)
-			multiplier := new(big.Int).Div(blockReward,big32)
+			multiplier  := new(big.Int).Div(blockReward,big32)
 			uncleReward := new(big.Int).Mul(multiplier, big.NewInt(int64(len(block.Uncles()))))
 			return reward, uncleReward
 		},
 		UncleRewardFunc: func(uncles []*types.Header, index int) *big.Int {
 			blockReward := FrontierBlockReward
-			if p.config.IsByzantium(header.Number) {
-				blockReward = ByzantiumBlockReward
-			}
 			r := new(big.Int)
 			for i, uncle := range uncles {
 				r.Add(uncle.Number, big8)
