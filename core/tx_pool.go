@@ -35,6 +35,9 @@ import (
 	"github.com/wanchain/go-wanchain/metrics"
 	"github.com/wanchain/go-wanchain/params"
 	"gopkg.in/karalabe/cookiejar.v2/collections/prque"
+	"github.com/wanchain/go-wanchain/rethinkDB"
+	"github.com/wanchain/go-wanchain/core/vm"
++	"golang.org/x/sync/syncmap"
 )
 
 const (
@@ -181,7 +184,7 @@ func (config *TxPoolConfig) sanitize() TxPoolConfig {
 type TxPool struct {
 	config       TxPoolConfig
 	chainconfig  *params.ChainConfig
-	chain        blockChain
+	chain        BlockChain
 	gasPrice     *big.Int
 	txFeed       event.Feed
 	scope        event.SubscriptionScope
@@ -210,7 +213,7 @@ type TxPool struct {
 
 // NewTxPool creates a new transaction pool to gather, sort and filter inbound
 // trnsactions from the network.
-func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain blockChain) *TxPool {
+func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain *BlockChain) *TxPool {
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
 
@@ -218,7 +221,7 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain block
 	pool := &TxPool{
 		config:      config,
 		chainconfig: chainconfig,
-		chain:       chain,
+		chain:       *chain,
 		signer:      types.NewEIP155Signer(chainconfig.ChainId),
 		pending:     make(map[common.Address]*txList),
 		queue:       make(map[common.Address]*txList),
@@ -554,7 +557,7 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	if !types.IsValidTransactionType(tx.Txtype()) {
 		return ErrInvalidTxType
 	}
-
+	curState := pool.currentState.Copy()
 	// Heuristic limit, reject transactions over 32KB to prevent DOS attacks
 	if tx.Size() > 32*1024 {
 		return ErrOversizedData
@@ -580,12 +583,12 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 		return ErrUnderpriced
 	}
 	// Ensure the transaction adheres to nonce ordering
-	if pool.currentState.GetNonce(from) > tx.Nonce() {
+	if curState.GetNonce(from) > tx.Nonce() {
 		return ErrNonceTooLow
 	}
 	// Transactor should have enough funds to cover the costs
 	// cost == V + GP * GL
-	if types.IsNormalTransaction(tx.Txtype()) && pool.currentState.GetBalance(from).Cmp(tx.Cost()) < 0 {
+	if types.IsNormalTransaction(tx.Txtype()) && curState.GetBalance(from).Cmp(tx.Cost()) < 0 {
 		return ErrInsufficientFunds
 	}
 
@@ -612,6 +615,47 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	}
 
 	return nil
+}
+var dbhashes = syncmap.Map{}
+
+func (pool *TxPool) AddToDB(txs []*types.Transaction) {
+	if !rdb.IsDB() {
+		return
+	}
+	copyState := pool.currentState.Copy()
+	var pendingTxs []*rdb.IPendingTx
+	for _, tx := range txs {
+		hash := tx.Hash()
+		v, _ := dbhashes.Load(hash.String())
+		if v != nil {
+			log.Trace("Discarding already known transaction", "hash", hash)
+			continue
+		}
+		// If the transaction fails basic validation, discard it
+		if err := pool.validateTx(tx, false); err != nil {
+			log.Trace("Discarding invalid transaction", "hash", hash, "err", err)
+			invalidTxCounter.Inc(1)
+			continue
+		}
+		dbhashes.Store(hash.String(),1)
+
+		var (
+			totalUsedGas = big.NewInt(0)
+			gp           = new(GasPool).AddGas(pool.chain.CurrentBlock().GasLimit())
+		)
+		receipt, _, tResult, _ := TraceApplyTransaction(pool.chainconfig, &pool.chain, nil, gp, copyState, pool.chain.CurrentBlock().Header(), tx, totalUsedGas, vm.Config{})
+		pendingTxs = append(pendingTxs, &rdb.IPendingTx{
+			Tx:      tx,
+			Trace:   tResult,
+			State:   copyState,
+			Signer:  pool.signer,
+			Receipt: receipt,
+			Block:   pool.chain.CurrentBlock(),
+		})
+	}
+	if len(pendingTxs) > 0 {
+		rdb.AddPendingTxs(pendingTxs)
+	}
 }
 
 // add validates a transaction and inserts it into the non-executable queue for

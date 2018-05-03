@@ -106,6 +106,8 @@ type txPool interface {
 	// SubscribeTxPreEvent should return an event subscription of
 	// TxPreEvent and send events to the given channel.
 	SubscribeTxPreEvent(chan<- core.TxPreEvent) event.Subscription
+
+	AddToDB([]*types.Transaction)
 }
 
 // statusData is the network packet for the status message.

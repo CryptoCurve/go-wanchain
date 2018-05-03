@@ -1475,6 +1475,11 @@ func (s *PublicTransactionPoolAPI) ComputeOTAPPKeys(ctx context.Context, address
 
 }
 
+// write description
+func (s *PublicTransactionPoolAPI) GetKeyValue(ctx context.Context, key hexutil.Bytes) (hexutil.Bytes, error) {
+	return s.b.ChainDb().Get(key)
+}
+
 // SendRawTransaction will add the signed transaction to the transaction pool.
 // The sender is responsible for signing the transaction and using the correct nonce.
 func (s *PublicTransactionPoolAPI) SendRawTransaction(ctx context.Context, encodedTx hexutil.Bytes) (common.Hash, error) {

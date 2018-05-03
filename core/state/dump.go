@@ -23,6 +23,8 @@ import (
 	"github.com/wanchain/go-wanchain/common"
 	"github.com/wanchain/go-wanchain/rlp"
 	"github.com/wanchain/go-wanchain/trie"
+	"github.com/wanchain/go-wanchain/common/hexutil"
+	"log"
 )
 
 type DumpAccount struct {
@@ -69,6 +71,27 @@ func (self *StateDB) RawDump() Dump {
 		dump.Accounts[common.Bytes2Hex(addr)] = account
 	}
 	return dump
+}
+
+func (self *StateDB) DumpAll() interface{} {
+	storage := make(map[string]string)
+	it := trie.NewIterator(self.trie.NodeIterator(nil))
+	for it.Next() {
+		addr := self.trie.GetKey(it.Key)
+		log.Printf("%s \n", common.BytesToAddress(addr))
+		storage[hexutil.Encode(addr)] = hexutil.Encode(it.Value)
+		var data Account
+		if err := rlp.DecodeBytes(it.Value, &data); err != nil {
+			panic(err)
+		}
+
+		obj := newObject(nil, common.BytesToAddress(addr), data, nil)
+		storageIt := trie.NewIterator(obj.getTrie(self.db).NodeIterator(nil))
+		for storageIt.Next() {
+			storage[hexutil.Encode(self.trie.GetKey(storageIt.Key))] = hexutil.Encode(storageIt.Value)
+		}
+	}
+	return storage
 }
 
 func (self *StateDB) Dump() []byte {

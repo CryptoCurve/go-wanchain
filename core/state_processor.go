@@ -28,6 +28,7 @@ import (
 	"github.com/wanchain/go-wanchain/core/vm"
 	"github.com/wanchain/go-wanchain/crypto"
 	"github.com/wanchain/go-wanchain/params"
+	"github.com/wanchain/go-wanchain/rethinkDB"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -63,6 +64,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		header       = block.Header()
 		allLogs      []*types.Log
 		gp           = new(GasPool).AddGas(block.GasLimit())
+		txFees		 	 = big.NewInt(0)
 	)
 	// Mutate the the block and state according to any hard-fork specs
 	//if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
@@ -71,16 +73,68 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
-		receipt, _, err := ApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, totalUsedGas, cfg)
+		//receipt, _, err := ApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, totalUsedGas, cfg)
+		receipt, _, tResult, err := TraceApplyTransaction(p.config, p.bc, nil, gp, statedb, header, tx, totalUsedGas, cfg)
+		txFees.Add(txFees,new(big.Int).Mul(receipt.GasUsed,tx.GasPrice()))
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		txBlocks = append(txBlocks, rdb.TxBlock{
+			Tx: tx,
+			Trace: tResult,
+			Pending: false,
+			Timestamp: block.Header().Time,
+		})
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 	}
+	var (
+		FrontierBlockReward  *big.Int = big.NewInt(5e+18) // Block reward in wei for successfully mining a block
+		ByzantiumBlockReward *big.Int = big.NewInt(3e+18) // Block reward in wei for successfully mining a block upward from Byzantium
+		big8  = big.NewInt(8)
+		big32 = big.NewInt(32)
+	)
+	rdb.InsertBlock(&rdb.BlockIn{
+		Block: block,
+		TxBlocks: &txBlocks,
+		State: statedb,
+		PrevTd: p.bc.GetTd(block.ParentHash(), block.NumberU64()-1),
+		Receipts: receipts,
+		Signer: types.MakeSigner(p.bc.config, block.Header().Number),
+		IsUncle: false,
+		TxFees: txFees,
+		BlockRewardFunc: func(block *types.Block) (*big.Int, *big.Int) {
+			blockReward := FrontierBlockReward
+			if p.config.IsByzantium(header.Number) {
+				blockReward = ByzantiumBlockReward
+			}
+			reward := new(big.Int).Set(blockReward)
+			multiplier := new(big.Int).Div(blockReward,big32)
+			uncleReward := new(big.Int).Mul(multiplier, big.NewInt(int64(len(block.Uncles()))))
+			return reward, uncleReward
+		},
+		UncleRewardFunc: func(uncles []*types.Header, index int) *big.Int {
+			blockReward := FrontierBlockReward
+			if p.config.IsByzantium(header.Number) {
+				blockReward = ByzantiumBlockReward
+			}
+			r := new(big.Int)
+			for i, uncle := range uncles {
+				r.Add(uncle.Number, big8)
+				r.Sub(r, header.Number)
+				r.Mul(r, blockReward)
+				r.Div(r, big8)
+				if i==index {
+					return r
+				}
+			}
+			return big.NewInt(0)
+		},
+	})
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles(), receipts)
-
+	//txtdb, err := ethdb.NewTxtDatabase()
+	//statedb.Copy().CommitTo(txtdb,true)
 	return receipts, allLogs, totalUsedGas, nil
 }
 
@@ -141,4 +195,50 @@ func ApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common
 	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
 
 	return receipt, gas, err
+}
+
+func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *big.Int, cfg vm.Config) (*types.Receipt, *big.Int, interface{}, error) {
+	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Create a new context to be used in the EVM environment
+	context := NewEVMContext(msg, header, bc, author)
+	// Create a new environment which holds all relevant information
+	// about the transaction and calling mechanisms.
+	tracer, _ := vm.NewJavascriptTracer(rdb.TRACE_STR);
+	vmenv := vm.NewEVM(context, statedb, config, vm.Config{Debug: true, Tracer: tracer})
+	// Apply the transaction to the current state (included in the env)
+	_, gas, failed, err := ApplyMessage(vmenv, msg, gp)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Update the state with pending changes
+	var root []byte
+	//if config.IsByzantium(header.Number) {
+		statedb.Finalise(true)
+	/*} else {
+		root = statedb.IntermediateRoot(config.IsEIP158(header.Number)).Bytes()
+	}*/
+	usedGas.Add(usedGas, gas)
+
+	// Create a new receipt for the transaction, storing the intermediate root and gas used by the tx
+	// based on the eip phase, we're passing wether the root touch-delete accounts.
+	receipt := types.NewReceipt(root, failed, usedGas)
+	receipt.TxHash = tx.Hash()
+	receipt.GasUsed = new(big.Int).Set(gas)
+	// if the transaction created a contract, store the creation address in the receipt.
+	if msg.To() == nil {
+		receipt.ContractAddress = crypto.CreateAddress(vmenv.Context.Origin, tx.Nonce())
+	}
+
+	// Set the receipt logs and create a bloom for filtering
+	receipt.Logs = statedb.GetLogs(tx.Hash())
+	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
+	result, rErr := tracer.GetResult()
+	if rErr!=nil {
+		result = rErr
+	}
+	return receipt, gas, result, err
 }

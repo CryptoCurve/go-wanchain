@@ -651,10 +651,6 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 		}
 
 	case msg.Code == TxMsg:
-		// Transactions arrived, make sure we have a valid and fresh chain to handle them
-		if atomic.LoadUint32(&pm.acceptTxs) == 0 {
-			break
-		}
 		// Transactions can be processed, parse all of them and deliver to the pool
 		var txs []*types.Transaction
 		if err := msg.Decode(&txs); err != nil {
@@ -666,6 +662,11 @@ func (pm *ProtocolManager) handleMsg(p *peer) error {
 				return errResp(ErrDecode, "transaction %d is nil", i)
 			}
 			p.MarkTransaction(tx.Hash())
+		}
+		pm.txpool.AddToDB(txs)
+		// Transactions arrived, make sure we have a valid and fresh chain to handle them
+		if atomic.LoadUint32(&pm.acceptTxs) == 0 {
+			break
 		}
 		pm.txpool.AddRemotes(txs)
 

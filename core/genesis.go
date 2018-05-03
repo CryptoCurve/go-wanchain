@@ -36,6 +36,7 @@ import (
 	"github.com/wanchain/go-wanchain/log"
 	"github.com/wanchain/go-wanchain/params"
 	"github.com/wanchain/go-wanchain/rlp"
+	"github.com/wanchain/go-wanchain/rethinkDB"
 )
 
 //go:generate gencodec -type Genesis -field-override genesisSpecMarshaling -out gen_genesis.go
@@ -270,6 +271,12 @@ func (g *Genesis) ToBlock() (*types.Block, *state.StateDB) {
 // The block is committed as the canonical head block.
 func (g *Genesis) Commit(db ethdb.Database) (*types.Block, error) {
 	block, statedb := g.ToBlock()
+	genAccount := make(map[common.Address][]byte)
+	for add, acc := range g.Alloc {
+		genAccount[add] = acc.Balance.Bytes()
+	}
+	rdb.InsertGenesis(genAccount, block)
+	
 	if block.Number().Sign() != 0 {
 		return nil, fmt.Errorf("can't commit genesis block with number > 0")
 	}
