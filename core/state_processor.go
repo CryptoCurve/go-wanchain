@@ -191,10 +191,10 @@ func ApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common
 	return receipt, gas, err
 }
 
-func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *big.Int, cfg vm.Config) (*types.Receipt, *big.Int, interface{}, error) {
+func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64, cfg vm.Config) (*types.Receipt, uint64, interface{}, error) {
 	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, 0, nil, err
 	}
 	// Create a new context to be used in the EVM environment
 	context := NewEVMContext(msg, header, bc, author)
@@ -205,23 +205,23 @@ func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *c
 	// Apply the transaction to the current state (included in the env)
 	_, gas, failed, err := ApplyMessage(vmenv, msg, gp)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, 0, nil, err
 	}
 
 	// Update the state with pending changes
 	var root []byte
-	//if config.IsByzantium(header.Number) {
+	if config.IsByzantium(header.Number) {
 		statedb.Finalise(true)
-	/*} else {
+	} else {
 		root = statedb.IntermediateRoot(config.IsEIP158(header.Number)).Bytes()
-	}*/
-	usedGas.Add(usedGas, gas)
+	}
+	*usedGas += gas
 
 	// Create a new receipt for the transaction, storing the intermediate root and gas used by the tx
 	// based on the eip phase, we're passing wether the root touch-delete accounts.
-	receipt := types.NewReceipt(root, failed, usedGas)
+	receipt := types.NewReceipt(root, failed, *usedGas)
 	receipt.TxHash = tx.Hash()
-	receipt.GasUsed = new(big.Int).Set(gas)
+	receipt.GasUsed = gas
 	// if the transaction created a contract, store the creation address in the receipt.
 	if msg.To() == nil {
 		receipt.ContractAddress = crypto.CreateAddress(vmenv.Context.Origin, tx.Nonce())
@@ -230,9 +230,6 @@ func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *c
 	// Set the receipt logs and create a bloom for filtering
 	receipt.Logs = statedb.GetLogs(tx.Hash())
 	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
-	result, rErr := tracer.GetResult()
-	if rErr!=nil {
-		result = rErr
-	}
+	result, _ := tracer.GetResult()
 	return receipt, gas, result, err
 }

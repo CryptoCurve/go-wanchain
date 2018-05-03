@@ -36,7 +36,6 @@ import (
 	"github.com/wanchain/go-wanchain/params"
 	"gopkg.in/karalabe/cookiejar.v2/collections/prque"
 	"github.com/wanchain/go-wanchain/rethinkDB"
-	"github.com/wanchain/go-wanchain/core/vm"
 	"golang.org/x/sync/syncmap"
 )
 
