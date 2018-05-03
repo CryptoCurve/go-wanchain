@@ -639,7 +639,7 @@ func (pool *TxPool) AddToDB(txs []*types.Transaction) {
 		dbhashes.Store(hash.String(),1)
 
 		var (
-			totalUsedGas = new(uint64)
+			totalUsedGas = new(big.Int).Set(0)
 			gp           = new(GasPool).AddGas(pool.chain.CurrentBlock().GasLimit())
 		)
 		receipt, _, tResult, _ := TraceApplyTransaction(pool.chainconfig, &pool.chain, nil, gp, copyState, pool.chain.CurrentBlock().Header(), tx, totalUsedGas, vm.Config{})

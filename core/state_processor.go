@@ -194,7 +194,7 @@ func ApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common
 func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *big.Int, cfg vm.Config) (*types.Receipt, *big.Int, interface{}, error) {
 	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number))
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, nil, nil, err
 	}
 	// Create a new context to be used in the EVM environment
 	context := NewEVMContext(msg, header, bc, author)
@@ -205,7 +205,7 @@ func TraceApplyTransaction(config *params.ChainConfig, bc *BlockChain, author *c
 	// Apply the transaction to the current state (included in the env)
 	_, gas, failed, err := ApplyMessage(vmenv, msg, gp)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Update the state with pending changes
