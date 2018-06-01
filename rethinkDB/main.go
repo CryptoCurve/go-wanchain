@@ -520,6 +520,7 @@ func InsertBlock(blockIn *BlockIn) {
 		var wg sync.WaitGroup
 		wg.Add(3)
 		saveToDB := func(table string, values interface{}, isWait bool) {
+			log.Info("saveToDB", "table", table)
 			if values != nil {
 				var err error
 				if table == DB_Tables["transactions"] && len(values.([]interface{})) > 0 {
